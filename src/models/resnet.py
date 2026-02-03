@@ -45,8 +45,10 @@ class ResNetExtractor:
             img_right = img.crop((1000, 0, 2000, 1000))
             
             # 2. Preprocess
-            t_left = self.preprocess(img_left).unsqueeze(0).to(self.device)
-            t_right = self.preprocess(img_right).unsqueeze(0).to(self.device)
+            t_left = self.preprocess(img_left)
+            t_left = t_left.unsqueeze(0).to(self.device)
+            t_right = self.preprocess(img_right)
+            t_right = t_right.unsqueeze(0).to(self.device)
             
             # 3. Extract Features
             with torch.no_grad():
