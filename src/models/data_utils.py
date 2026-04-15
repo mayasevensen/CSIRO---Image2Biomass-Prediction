@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from sklearn.metrics import mean_squared_error
 
 
 # Canonical target order (use this everywhere)
@@ -64,9 +65,6 @@ def prepare_submission(test_csv_path, predictions, image_ids):
     df_test['target'] = df_test.apply(get_pred, axis=1)
     
     return df_test[['sample_id', 'target']]
-
-
-from sklearn.metrics import mean_squared_error
 
 def weighted_global_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """
