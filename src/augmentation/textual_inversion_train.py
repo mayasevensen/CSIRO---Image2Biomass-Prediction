@@ -1,17 +1,12 @@
 """
 DA-Fusion Step 1: Textual Inversion Training
 ============================================
-Run this script on Google Colab or HubroHub (GPU required).
-
 For each species with >= 10 images, learns a custom token <species_token>
 that represents the visual appearance of that species in your dataset.
 
 Species with < 10 images (Mixed, SubcloverDalkeith, SubcloverLosa,
-Phalaris_Clover_Ryegrass_Barleygrass_Bromegrass) are skipped — they will
+Phalaris_Clover_Ryegrass_Barleygrass_Bromegrass) are skipped - they will
 use generic prompts during augmentation instead.
-
-SETUP (run in Colab/HubroHub before this script):
-    pip install diffusers transformers accelerate torch torchvision Pillow
 
 USAGE:
     python textual_inversion_train.py \
@@ -50,7 +45,7 @@ GRADIENT_ACCUMULATION_STEPS = 4
 IMAGE_SIZE = 512                # SD default
 SEED = 42
 
-# Species with < MIN_IMAGES_FOR_TI — will be handled by generic prompts
+# Species with < MIN_IMAGES_FOR_TI - will be handled by generic prompts
 SKIP_SPECIES = {"Mixed", "SubcloverDalkeith", "SubcloverLosa",
                 "Phalaris_Clover_Ryegrass_Barleygrass_Bromegrass"}
 

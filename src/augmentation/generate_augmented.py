@@ -1,15 +1,9 @@
 """
 DA-Fusion Step 2: Generate Augmented Images
 ============================================
-Run this script on Google Colab or HubroHub (GPU required).
-Run AFTER textual_inversion_train.py has completed.
-
 For each training image:
   - Group A species (token learned): uses <species_token> + img2img
   - Group B species (too few images): uses generic prompt + img2img
-
-Augmented images are saved alongside a new CSV that you can load
-locally in your existing pipeline.
 
 USAGE:
     python generate_augmented.py \
@@ -65,7 +59,7 @@ def load_pipeline_with_tokens(token_dir: str, device: str):
     pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        safety_checker=None,        # Disable — field photos won't trigger it anyway
+        safety_checker=None,        # Disable - field photos won't trigger it anyway
     ).to(device)
 
     token_map = {}   # species -> token string
@@ -123,7 +117,7 @@ def augment_image(pipe, image_path: str, prompt: str,
     """
     img = Image.open(image_path).convert("RGB")
 
-    # Pick a half — vary by aug_idx for diversity across augmentations
+    # Pick a half - vary by aug_idx for diversity across augmentations
     if aug_idx % 2 == 0:
         crop = img.crop((0, 0, 1000, 1000))
     else:
