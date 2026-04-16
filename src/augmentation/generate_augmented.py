@@ -39,7 +39,7 @@ GENERIC_SPECIES = {"Mixed", "SubcloverDalkeith", "SubcloverLosa",
                    "Phalaris_Clover_Ryegrass_Barleygrass_Bromegrass"}
 
 # Generic prompt used for species without a learned token
-# Deliberately vague to avoid data leakage (matches paper's data-centric approach)
+# Deliberately vague to avoid data leakage (data centric augmentation, not model centric)
 GENERIC_PROMPT = "a photograph of pasture vegetation, outdoor field, natural lighting"
 
 # ─── Token name helper (must match textual_inversion_train.py) ─────────────────

@@ -38,7 +38,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 
 MODEL_ID = "runwayml/stable-diffusion-v1-5"
 MIN_IMAGES_FOR_TI = 10          # Species below this threshold use generic prompts
-NUM_TRAIN_STEPS = 500           # Per species. Increase to 1000 if you have time.
+NUM_TRAIN_STEPS = 500           # Can be increased for better results, but 500 is a good start for 10-20 images/species
 LEARNING_RATE = 5e-4
 TRAIN_BATCH_SIZE = 1
 GRADIENT_ACCUMULATION_STEPS = 4
@@ -61,7 +61,7 @@ def species_to_token(species: str) -> str:
 class SpeciesDataset(Dataset):
     """
     Returns (image_tensor, prompt) pairs for one species.
-    Images are the 2000x1000 field photos — we randomly crop one
+    Images are the 2000x1000 field photos, we randomly crop one
     of the two 1000x1000 halves per sample to get diversity.
     """
     def __init__(self, image_paths, token, tokenizer, image_size=512):
