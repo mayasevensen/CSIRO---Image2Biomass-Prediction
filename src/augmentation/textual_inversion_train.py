@@ -38,7 +38,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 
 MODEL_ID = "runwayml/stable-diffusion-v1-5"
 MIN_IMAGES_FOR_TI = 10          # Species below this threshold use generic prompts
-NUM_TRAIN_STEPS = 500           # Can be increased for better results, but 500 is a good start for 10-20 images/species
+NUM_TRAIN_STEPS = 500           
 LEARNING_RATE = 5e-4
 TRAIN_BATCH_SIZE = 1
 GRADIENT_ACCUMULATION_STEPS = 4
