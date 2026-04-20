@@ -10,6 +10,11 @@ requires deleting the cache files and re-running):
     output  : CLS token  →  384-d
     norm    : ImageNet mean/std  [0.485,0.456,0.406] / [0.229,0.224,0.225]
 
+  DINOv2 (augmented images):
+    Same model, but resize : 252 x 252  (square, patch_size=14 → 18×18 patches)
+    Augmented images are 512×512 square crops — resizing to 504×252 would
+    squash them 2:1 and distort features relative to real images.
+
   ResNet50:
     model   : torchvision ResNet50 (ImageNet pretrained, frozen, fc removed)
     crop    : left 1000x1000 + right 1000x1000 halves of the 2000x1000 image
@@ -18,9 +23,13 @@ requires deleting the cache files and re-running):
     norm    : ImageNet mean/std
 
 Cache files written to src/CEMS/cache/:
-  features_dinov2.npy   (N, 384)
-  features_resnet50.npy (N, 2048)
-  image_ids.npy         (N,)   string array of image IDs
+  features_dinov2.npy          (N, 384)   — real training images
+  features_resnet50.npy        (N, 2048)  — real training images
+  image_ids.npy                (N,)       — string array of image IDs
+  test_features_dinov2.npy     (M, 384)   — test images
+  test_image_ids.npy           (M,)       — test image IDs
+  augmented_features_dinov2.npy (K, 384)  — DA-Fusion synthetic images
+  augmented_image_ids.npy      (K,)       — augmented image IDs (filename stems)
 """
 
 import os
@@ -38,22 +47,34 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 IMAGE_DIR = REPO_ROOT / "data" / "image" / "train"
 CACHE_DIR = Path(__file__).resolve().parent / "cache"
 TEST_IMAGE_DIR = REPO_ROOT / "data" / "image" / "test"
+AUG_IMAGE_DIR = REPO_ROOT / "data" / "image" / "augmented"
 
 DINOV2_CACHE = CACHE_DIR / "features_dinov2.npy"
 RESNET_CACHE = CACHE_DIR / "features_resnet50.npy"
 IDS_CACHE = CACHE_DIR / "image_ids.npy"
 TEST_IMAGE_CACHE = CACHE_DIR / "test_features_dinov2.npy"
 TEST_IDS_CACHE = CACHE_DIR / "test_image_ids.npy"
+AUG_IMAGE_CACHE = CACHE_DIR / "augmented_features_dinov2.npy"
+AUG_IDS_CACHE = CACHE_DIR / "augmented_image_ids.npy"
 
 
 # ---------------------------------------------------------------------------
 # DINOv2 extractor
 # ---------------------------------------------------------------------------
 
-DINOV2_RESIZE = (504, 252)  # (width, height) → 36×18 patches at patch_size=14
+DINOV2_RESIZE = (504, 252)      # (width, height) → 36×18 patches, for 2:1 real images
+AUG_DINOV2_RESIZE = (252, 252)  # (width, height) → 18×18 patches, for 512×512 augmented images
 
 _dinov2_transform = transforms.Compose([
     transforms.Resize((DINOV2_RESIZE[1], DINOV2_RESIZE[0])),  # H, W
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225]),
+])
+
+# Separate transform for augmented images: square resize to preserve aspect ratio
+_aug_dinov2_transform = transforms.Compose([
+    transforms.Resize((AUG_DINOV2_RESIZE[1], AUG_DINOV2_RESIZE[0])),  # H, W
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                          std=[0.229, 0.224, 0.225]),
@@ -78,15 +99,25 @@ def _smoke_test_dinov2(model, device):
     print(f"  DINOv2 smoke test passed — output shape: {out.shape}")
 
 
-def extract_dinov2(image_paths, device):
-    """Return (N, 384) array of CLS-token features."""
+def extract_dinov2(image_paths, device, transform=None):
+    """
+    Return (N, 384) array of CLS-token features.
+
+    Args:
+        transform: torchvision transform to apply. Defaults to _dinov2_transform
+                   (504×252, for 2:1 real images). Pass _aug_dinov2_transform
+                   for 512×512 augmented images.
+    """
+    if transform is None:
+        transform = _dinov2_transform
+
     model = _load_dinov2(device)
     _smoke_test_dinov2(model, device)
 
     feats = []
     for i, p in enumerate(image_paths):
         img = Image.open(p).convert("RGB")
-        x = _dinov2_transform(img).unsqueeze(0).to(device)
+        x = transform(img).unsqueeze(0).to(device)
         with torch.no_grad():
             feat = model(x).squeeze(0).cpu().numpy()
         feats.append(feat)
@@ -147,42 +178,71 @@ def extract_resnet50(image_paths, device):
 # ---------------------------------------------------------------------------
 
 def main():
-    if DINOV2_CACHE.exists() and RESNET_CACHE.exists() and IDS_CACHE.exists() and TEST_IMAGE_CACHE.exists() and TEST_IDS_CACHE.exists():
-        print("Cache already exists — skipping extraction.")
-        print(f"  DINOv2:  {np.load(DINOV2_CACHE).shape}")
-        print(f"  ResNet50:{np.load(RESNET_CACHE).shape}")
-        print(f"  Test images: {np.load(TEST_IDS_CACHE).shape}")
-        return
-
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-    image_paths = sorted(IMAGE_DIR.glob("*.jpg"))
-    test_image_paths = sorted(TEST_IMAGE_DIR.glob("*.jpg"))
-    image_ids = np.array([p.stem for p in image_paths])
-    test_image_ids = np.array([p.stem for p in test_image_paths])
-    print(f"Found {len(image_paths)} training images.")
-    print(f"Found {len(test_image_paths)} test images.")
 
     device = "mps" if torch.backends.mps.is_available() else (
         "cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
-    print("\n--- DINOv2 extraction ---")
-    feats_dino = extract_dinov2(image_paths, device)
-    test_feats_dino = extract_dinov2(test_image_paths, device)
-    print(f"  Done. Shape: {feats_dino.shape}")
-    print(f"  Test images: {test_feats_dino.shape}")
+    # --- Training + test features ---
+    train_test_cached = (
+        DINOV2_CACHE.exists() and RESNET_CACHE.exists() and IDS_CACHE.exists()
+        and TEST_IMAGE_CACHE.exists() and TEST_IDS_CACHE.exists()
+    )
+    if train_test_cached:
+        print("Train/test cache already exists — skipping.")
+        print(f"  DINOv2:   {np.load(DINOV2_CACHE).shape}")
+        print(f"  ResNet50: {np.load(RESNET_CACHE).shape}")
+        print(f"  Test:     {np.load(TEST_IDS_CACHE).shape}")
+    else:
+        image_paths = sorted(IMAGE_DIR.glob("*.jpg"))
+        test_image_paths = sorted(TEST_IMAGE_DIR.glob("*.jpg"))
+        image_ids = np.array([p.stem for p in image_paths])
+        test_image_ids = np.array([p.stem for p in test_image_paths])
+        print(f"Found {len(image_paths)} training images.")
+        print(f"Found {len(test_image_paths)} test images.")
 
-    print("\n--- ResNet50 extraction ---")
-    feats_resnet = extract_resnet50(image_paths, device)
-    print(f"  Done. Shape: {feats_resnet.shape}")
+        print("\n--- DINOv2 extraction (train + test) ---")
+        feats_dino = extract_dinov2(image_paths, device)
+        test_feats_dino = extract_dinov2(test_image_paths, device)
+        print(f"  Train: {feats_dino.shape}")
+        print(f"  Test:  {test_feats_dino.shape}")
 
-    np.save(DINOV2_CACHE, feats_dino)
-    np.save(RESNET_CACHE, feats_resnet)
-    np.save(IDS_CACHE, image_ids)
-    np.save(TEST_IMAGE_CACHE, test_feats_dino)
-    np.save(TEST_IDS_CACHE, test_image_ids)
-    print(f"\nCache saved to {CACHE_DIR}/")
+        print("\n--- ResNet50 extraction (train) ---")
+        feats_resnet = extract_resnet50(image_paths, device)
+        print(f"  Train: {feats_resnet.shape}")
+
+        np.save(DINOV2_CACHE, feats_dino)
+        np.save(RESNET_CACHE, feats_resnet)
+        np.save(IDS_CACHE, image_ids)
+        np.save(TEST_IMAGE_CACHE, test_feats_dino)
+        np.save(TEST_IDS_CACHE, test_image_ids)
+        print(f"Train/test cache saved to {CACHE_DIR}/")
+
+    # --- Augmented image features (DA-Fusion) ---
+    aug_cached = AUG_IMAGE_CACHE.exists() and AUG_IDS_CACHE.exists()
+    if aug_cached:
+        print(f"\nAugmented cache already exists — skipping.")
+        print(f"  Augmented: {np.load(AUG_IMAGE_CACHE).shape}")
+    else:
+        if not AUG_IMAGE_DIR.exists() or not any(AUG_IMAGE_DIR.glob("*.jpg")):
+            print(f"\n[SKIP] No augmented images found at {AUG_IMAGE_DIR}")
+            print("Run src/augmentation/generate_augmented.py first.")
+            return
+
+        augmented_image_paths = sorted(AUG_IMAGE_DIR.glob("*.jpg"))
+        augmented_image_ids = np.array([p.stem for p in augmented_image_paths])
+        print(f"\nFound {len(augmented_image_paths)} augmented images.")
+
+        print("\n--- DINOv2 extraction (augmented, 252×252) ---")
+        augmented_feats_dino = extract_dinov2(
+            augmented_image_paths, device, transform=_aug_dinov2_transform
+        )
+        print(f"  Augmented: {augmented_feats_dino.shape}")
+
+        np.save(AUG_IMAGE_CACHE, augmented_feats_dino)
+        np.save(AUG_IDS_CACHE, augmented_image_ids)
+        print(f"Augmented cache saved to {CACHE_DIR}/")
 
 
 if __name__ == "__main__":
