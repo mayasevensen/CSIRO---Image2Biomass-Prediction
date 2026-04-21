@@ -13,9 +13,9 @@ Three checks:
       true manifold than with the full second-order correction.
 
 Run with:
-    python -m pytest src/CEMS/tests/test_cems_sanity.py -v
+    python -m pytest src/methods/cems/tests/test_cems_sanity.py -v
     # or
-    python src/CEMS/tests/test_cems_sanity.py
+    python src/methods/cems/tests/test_cems_sanity.py
 """
 from __future__ import annotations
 
@@ -27,10 +27,10 @@ from types import SimpleNamespace
 import numpy as np
 import torch
 
-# Allow running as a script from repo root
+# Allow running as a script; src/ is the import root
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from src.CEMS.cems import (
+from methods.cems.cems import (
     get_batch_cems,
     _adjust_dims,
     _get_projection,

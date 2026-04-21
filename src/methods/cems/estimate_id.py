@@ -2,12 +2,10 @@
 Intrinsic dimension (ID) estimation for CEMS Part 1.
 
 Estimates ID on:
-  (a) Raw DINOv2 features  (N, 384)
-  (b) Raw ResNet50 features (N, 2048)
-  (c) Labels alone          (N, 5)
+  (a) DINOv2 features (N, 384)
+  (b) Labels alone    (N, 5)
 
 Uses TwoNN estimator (scikit-dimension if available, in-house fallback).
-Label loading logic copied from src/models/data_utils.py — no cross-folder imports.
 """
 
 import sys
@@ -19,14 +17,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CACHE_DIR = Path(__file__).resolve().parent / "cache"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+CACHE_DIR = Path(__file__).resolve().parents[2] / "cache"
 CSV_PATH = REPO_ROOT / "data" / "tabular" / "train" / "train.csv"
 
 TARGETS = ["Dry_Green_g", "Dry_Dead_g", "Dry_Clover_g", "GDM_g", "Dry_Total_g"]
 
 # ---------------------------------------------------------------------------
-# Label loading  (copied from data_utils.load_train_data)
+# Label loading
 # ---------------------------------------------------------------------------
 
 def load_labels(csv_path):
@@ -111,17 +109,14 @@ def main():
     # ---- load features ----
     print("Loading cached features...")
     feats_dino = np.load(CACHE_DIR / "features_dinov2.npy")
-    feats_resnet = np.load(CACHE_DIR / "features_resnet50.npy")
     image_ids_cached = np.load(CACHE_DIR / "image_ids.npy", allow_pickle=True)
     N = len(feats_dino)
     print(f"  DINOv2:  {feats_dino.shape}")
-    print(f"  ResNet50:{feats_resnet.shape}")
     print(f"  N = {N}")
 
     # ---- load labels and align to cached image order ----
     print("\nLoading labels...")
     df_wide, y_all = load_labels(CSV_PATH)
-    # align label rows to the order in the cache
     id_to_idx = {row["image_id"]: i for i, row in df_wide.iterrows()}
     label_order = [id_to_idx[img_id] for img_id in image_ids_cached
                    if img_id in id_to_idx]
@@ -130,9 +125,8 @@ def main():
 
     # ---- ID estimation ----
     print("\nEstimating intrinsic dimension (TwoNN)...")
-    d_dino   = estimate_id(feats_dino,   label="DINOv2 384-d")
-    d_resnet = estimate_id(feats_resnet, label="ResNet50 2048-d")
-    d_labels = estimate_id(y_values,     label="Labels 5-d")
+    d_dino   = estimate_id(feats_dino, label="DINOv2 384-d")
+    d_labels = estimate_id(y_values,   label="Labels 5-d")
 
     # ---- print summary ----
     print("\n" + "=" * 55)
@@ -140,11 +134,7 @@ def main():
     print("=" * 55)
     print(f"  N (training images)         : {N}")
     print(f"  (a) DINOv2 raw features     : d = {d_dino:.2f}")
-    print(f"  (b) ResNet50 raw features   : d = {d_resnet:.2f}")
-    print(f"  (c) Labels only (5-d)       : d = {d_labels:.2f}")
-    print()
-    lower_encoder = "DINOv2" if d_dino <= d_resnet else "ResNet50"
-    print(f"  Encoder with lower raw d    : {lower_encoder}")
+    print(f"  (b) Labels only (5-d)       : d = {d_labels:.2f}")
     print()
     print("  d² vs batch sizes (using DINOv2 d):")
     print(f"    d²  = {d_dino**2:.1f}")
@@ -160,7 +150,6 @@ def main():
     return {
         "N": N,
         "d_dino": d_dino,
-        "d_resnet": d_resnet,
         "d_labels": d_labels,
     }
 
