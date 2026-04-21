@@ -81,16 +81,35 @@ def load_train_data(csv_path):
 # Split builder
 # ---------------------------------------------------------------------------
 
-def make_splits(csv_path=CSV_PATH, n_splits=5, val_fold=0):
+def make_splits(csv_path=CSV_PATH, n_splits=5, val_fold=0, group_by="paddock"):
     """
     Returns (train_ids, val_ids): lists of image ID strings that index into
     the cached feature arrays.
+
+    Args:
+        group_by: Grouping strategy for GroupKFold.
+            "paddock" (default) — group by (State, Species, Sampling_Date).
+                Prevents leakage from multiple photos of the same field on the
+                same day appearing in both splits.
+            "image"  — group by image_path (legacy; equivalent to plain KFold
+                because each image has a unique path).
     """
     df = _make_wide_df(csv_path)
     image_ids_csv = df["image_path"].apply(_image_id_from_path).values
 
+    if group_by == "paddock":
+        groups = (
+            df["State"].astype(str) + "|" +
+            df["Species"].astype(str) + "|" +
+            df["Sampling_Date"].astype(str)
+        )
+    elif group_by == "image":
+        groups = df["image_path"]
+    else:
+        raise ValueError(f"Unknown group_by={group_by!r}. Use 'paddock' or 'image'.")
+
     gkf = GroupKFold(n_splits=n_splits)
-    splits = list(gkf.split(df, groups=df["image_path"]))
+    splits = list(gkf.split(df, groups=groups))
     train_idx, val_idx = splits[val_fold]
 
     train_ids = image_ids_csv[train_idx].tolist()
