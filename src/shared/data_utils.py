@@ -81,32 +81,42 @@ def load_train_data(csv_path):
 # Split builder
 # ---------------------------------------------------------------------------
 
-def make_splits(csv_path=CSV_PATH, n_splits=5, val_fold=0, group_by="paddock"):
+def _visit_group_key(df: pd.DataFrame) -> pd.Series:
+    """
+    A paddock-visit key: Sampling_Date + State + Species.
+
+    The CSV has 357 images but only ~40 unique (date, state, species) combos,
+    so many images come from the same visit. Grouping on image_path (the old
+    default) is effectively no-op — GroupKFold degenerates into KFold and
+    images from the same visit leak across splits.
+    """
+    return (
+        pd.to_datetime(df["Sampling_Date"]).dt.strftime("%Y-%m-%d")
+        + "__" + df["State"].astype(str)
+        + "__" + df["Species"].astype(str)
+    )
+
+
+def make_splits(csv_path=CSV_PATH, n_splits=5, val_fold=0, group_by="visit"):
     """
     Returns (train_ids, val_ids): lists of image ID strings that index into
     the cached feature arrays.
 
     Args:
-        group_by: Grouping strategy for GroupKFold.
-            "paddock" (default) — group by (State, Species, Sampling_Date).
-                Prevents leakage from multiple photos of the same field on the
-                same day appearing in both splits.
-            "image"  — group by image_path (legacy; equivalent to plain KFold
-                because each image has a unique path).
+        group_by: "visit" (default) — group by Sampling_Date + State + Species.
+                  "image_path" — legacy behaviour (groups are unique per image,
+                  so GroupKFold ≡ KFold; kept only for reproducibility of
+                  older results).
     """
     df = _make_wide_df(csv_path)
     image_ids_csv = df["image_path"].apply(_image_id_from_path).values
 
-    if group_by == "paddock":
-        groups = (
-            df["State"].astype(str) + "|" +
-            df["Species"].astype(str) + "|" +
-            df["Sampling_Date"].astype(str)
-        )
-    elif group_by == "image":
-        groups = df["image_path"]
+    if group_by == "visit":
+        groups = _visit_group_key(df).values
+    elif group_by == "image_path":
+        groups = df["image_path"].values
     else:
-        raise ValueError(f"Unknown group_by={group_by!r}. Use 'paddock' or 'image'.")
+        raise ValueError(f"Unknown group_by={group_by!r}")
 
     gkf = GroupKFold(n_splits=n_splits)
     splits = list(gkf.split(df, groups=groups))
@@ -162,12 +172,22 @@ def load_datasets(csv_path=CSV_PATH, cache_dir=CACHE_DIR):
         _image_id_from_path(row["image_path"]): row[TARGETS].values.astype(np.float32)
         for _, row in df.iterrows()
     }
+
+    # Label coverage: any cached image_id used in a split MUST have a label.
+    # Previously we silently substituted a zero vector for missing IDs, which
+    # could corrupt training.
+    train_ids, val_ids = make_splits(csv_path)
+    missing = [iid for iid in list(train_ids) + list(val_ids)
+               if iid not in id_to_label]
+    assert not missing, (
+        f"{len(missing)} split IDs have no label in the CSV "
+        f"(first few: {missing[:5]})"
+    )
+
     labels = np.stack([id_to_label.get(iid, np.zeros(5, dtype=np.float32))
                        for iid in image_ids])
 
     id_to_idx = {iid: i for i, iid in enumerate(image_ids)}
-
-    train_ids, val_ids = make_splits(csv_path)
 
     train_ds = BiomassFeatureDataset(train_ids, features, labels, id_to_idx)
     val_ds = BiomassFeatureDataset(val_ids, features, labels, id_to_idx)
