@@ -215,3 +215,7 @@ train_images.zip
 augmented_images.tar.gz
 learned_tokens.tar.gz
 home/
+
+# Local DINOv2 weights
+dinov2-small/
+dinov2-small.zip
