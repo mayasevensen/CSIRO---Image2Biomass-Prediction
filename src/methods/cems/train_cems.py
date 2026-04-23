@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from shared.train import eval_epoch, _weighted_smooth_l1, _LOSS_WEIGHTS
+from legacy.train import eval_epoch, _weighted_smooth_l1, _LOSS_WEIGHTS
 
 
 # ---------------------------------------------------------------------------
