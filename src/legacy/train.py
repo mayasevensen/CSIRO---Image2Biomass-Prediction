@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from ..shared.metrics import WEIGHT_VECTOR, weighted_global_r2, rmse_per_target
+from .metrics import WEIGHT_VECTOR, weighted_global_r2, rmse_per_target
 
 # Competition target weights (raw-scale loss)
 _LOSS_WEIGHTS = torch.tensor(WEIGHT_VECTOR, dtype=torch.float32)
