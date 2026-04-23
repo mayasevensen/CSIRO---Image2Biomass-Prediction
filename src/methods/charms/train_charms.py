@@ -26,7 +26,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from shared.metrics import WEIGHT_VECTOR, weighted_global_r2, rmse_per_target
+from legacy.metrics import WEIGHT_VECTOR, weighted_global_r2, rmse_per_target
 from .charms import BiomassCharmsModel, CharmsConfig, CharmsDataset
 
 _LOSS_WEIGHTS = torch.tensor(WEIGHT_VECTOR, dtype=torch.float32)
