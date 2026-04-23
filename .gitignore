@@ -211,6 +211,7 @@ __marimo__/
 
 # DA-Fusion augmented images (too large for git)
 data/image/augmented/
+data/image/augmented.zip
 train_images.zip
 augmented_images.tar.gz
 learned_tokens.tar.gz
