@@ -1,6 +1,5 @@
 """
 DA-Fusion Step 2: Generate Augmented Images
-============================================
 For each training image:
   - Group A species (token learned): uses <species_token> + img2img
   - Group B species (too few images): uses generic prompt + img2img
@@ -117,7 +116,7 @@ def augment_image(pipe, image_path: str, prompt: str,
     """
     img = Image.open(image_path).convert("RGB")
 
-    # Pick a half - vary by aug_idx for diversity across augmentations
+    # Pick a half, vary by aug_idx for diversity across augmentations
     if aug_idx % 2 == 0:
         crop = img.crop((0, 0, 1000, 1000))
     else:

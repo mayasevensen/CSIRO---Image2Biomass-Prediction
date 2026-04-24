@@ -1,11 +1,10 @@
 """
 DA-Fusion Step 1: Textual Inversion Training
-============================================
-For each species with >= 10 images, learns a custom token <species_token>
-that represents the visual appearance of that species in your dataset.
+For each species with >= 10 images, it learns a custom token <species_token>
+that represents the visual appearance of that species in the dataset.
 
 Species with < 10 images (Mixed, SubcloverDalkeith, SubcloverLosa,
-Phalaris_Clover_Ryegrass_Barleygrass_Bromegrass) are skipped - they will
+Phalaris_Clover_Ryegrass_Barleygrass_Bromegrass) are skipped. They will
 use generic prompts during augmentation instead.
 
 USAGE:
@@ -37,12 +36,12 @@ from transformers import CLIPTextModel, CLIPTokenizer
 # ─── Config ────────────────────────────────────────────────────────────────────
 
 MODEL_ID = "runwayml/stable-diffusion-v1-5"
-MIN_IMAGES_FOR_TI = 10          # Species below this threshold use generic prompts
+MIN_IMAGES_FOR_TI = 10      # Species below this threshold use generic prompts
 NUM_TRAIN_STEPS = 500           
 LEARNING_RATE = 5e-4
 TRAIN_BATCH_SIZE = 1
 GRADIENT_ACCUMULATION_STEPS = 4
-IMAGE_SIZE = 512                # SD default
+IMAGE_SIZE = 512            # SD default
 SEED = 42
 
 # Species with < MIN_IMAGES_FOR_TI - will be handled by generic prompts

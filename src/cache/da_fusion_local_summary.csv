@@ -1,0 +1,4 @@
+method,weighted_R2,delta_vs_baseline,RMSE_Dry_Green_g,RMSE_Dry_Dead_g,RMSE_Dry_Clover_g,RMSE_GDM_g,RMSE_Dry_Total_g
+Baseline,0.6805,0.0,16.106,11.189,13.611,13.885,14.552
+RandAugment,0.7903,0.1099,12.901,8.884,8.978,12.154,13.709
+DA-Fusion,0.7457,0.0652,14.349,10.018,10.649,13.445,15.633
