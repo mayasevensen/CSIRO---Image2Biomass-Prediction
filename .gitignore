@@ -220,3 +220,6 @@ home/
 # Local DINOv2 weights
 dinov2-small/
 dinov2-small.zip
+
+# Local CEMS-main
+src/methods/cems/CEMS-main/

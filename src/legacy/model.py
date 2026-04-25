@@ -14,7 +14,7 @@ the same training step so the encoder receives gradients from both.
 import torch
 import torch.nn as nn
 
-from methods.cems.cems import get_batch_cems
+from legacy.cems import get_batch_cems
 
 
 class Encoder(nn.Module):
