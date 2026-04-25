@@ -30,7 +30,7 @@ import torch
 # Allow running as a script; src/ is the import root
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from methods.cems.cems import (
+from legacy.cems import (
     get_batch_cems,
     _adjust_dims,
     _get_projection,
