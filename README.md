@@ -185,6 +185,7 @@ losses slow down overfitting slightly. The gain does not transfer to the
 Kaggle leaderboard, likely due to the small dataset making single-fold
 validation noisy.
 
+
 # DA-Fusion Augmentation (`kaggle_baseline_pipeline_charms.ipynb`) - Ragnhild's Contribution
 
 ## Method
@@ -209,5 +210,9 @@ Image2Biomass regression task.
 1. Run textual_inversion_train.py on a GPU 
 2. Run generate_augmented.py to generate synthetic images
 3. Run da_fusion_pipeline.ipynb locally or kaggle_da_fusion_pipeline.ipynb on Kaggle to compare methods
+
+
+The generated synthetic images can be accessed by following this link: https://www.kaggle.com/datasets/ragnhildklette/da-fusion-synthetic-biomass, since they are too large to host on GitHub. The notebooks will automatically download the features extracted from these synthetic images, so you can run the comparison experiment without needing to generate the synthetic data yourself.
+
 
 More information on the implementation and results can be found in the respective notebooks.
