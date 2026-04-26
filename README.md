@@ -2,6 +2,43 @@
 Build models that predict pasture biomass from images, ground-truth measurements, and publicly available datasets. Farmers will use these models to determine when and how to graze their livestock.
 
 
+
+## How to Run
+
+### Local
+
+All local notebooks detect the repo root automatically and download DINOv2 weights from HuggingFace on first run - no manual setup required.
+
+| Method | Notebook |
+|---|---|
+| CEMS | `src/methods/cems/cems_pipeline.ipynb` |
+| CHARMS | `src/methods/charms/charms_pipeline.ipynb` |
+| CHARMS (legacy) | `src/legacy/pipeline_charms.ipynb` |
+| DA-Fusion | `src/methods/da_fusion/da_fusion_pipeline.ipynb` |
+
+For DA-Fusion, synthetic augmented images must exist before running the notebook. If they are not present, generate them first:
+
+```bash
+python src/methods/da_fusion/generate_augmented.py \
+  --train_csv data/tabular/train/train.csv \
+  --image_dir data/image/train \
+  --token_dir src/methods/da_fusion/learned_tokens \
+  --output_image_dir data/image/train_augmented \
+  --output_csv data/tabular/train/train_augmented.csv
+```
+
+### Kaggle
+
+Use the `kaggle_` prefixed version of each notebook. DINOv2 weights must be uploaded as a Kaggle dataset before running:
+
+1. Run `src/shared/download_dino_weights.py` locally - this saves weights into `./dinov2-small/`.
+2. Upload the `dinov2-small/` folder as a new Kaggle dataset.
+3. Attach that dataset to your notebook and run.
+
+For DA-Fusion, synthetic augmented images must exist before running the notebook. If they are not present, generate them first locally (see above), then upload the `data/image/train_augmented/` folder and `data/tabular/train_augmented.csv` as Kaggle datasets and attach them to your notebook.
+
+---
+
 ## Shared Baseline Pipeline (`src/shared/dinov2_baseline.ipynb`)
 
 A frozen DINOv2 ViT-S/14 backbone extracts 384-d CLS tokens from each image, resized to 504×252 and normalised with ImageNet statistics. Four orientation augmentations (identity, hflip, vflip, hflip+vflip) expand each training image to four variants; GroupKFold (5 folds, grouped by source image) prevents leakage across augmented variants. Extracted features are passed through a two-stage MLP: an Encoder (384→256→64, GELU, Dropout 0.3) followed by a Head (64→32→5, GELU, Dropout 0.3). Training runs for 80 epochs with AdamW (lr=3×10⁻⁴, weight_decay=10⁻³) and cosine annealing; the objective is a per-target weighted SmoothL1 loss and the evaluation metric is the competition's weighted global R².
