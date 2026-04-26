@@ -1,0 +1,497 @@
+\documentclass[10pt, a4paper]{article}
+
+% ---- Packages ----
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{natbib}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{float}
+
+% ---- Title ----
+\title{%
+  \textbf{Image2Biomass Prediction with CEMS, CHARMS, and DA-Fusion}\\[0.5em]
+  \large INF367A -- CSIRO Kaggle Competition
+}
+
+\author{
+  Maya Evensen \and Ragnhild Klette \and Victor Slorer
+}
+
+\date{\today}
+
+% ---- Document ----
+\begin{document}
+
+\maketitle
+
+%% ----------------------------------------------------------------
+\begin{abstract}
+We evaluate three recently published methods for small-data multi-target
+regression on the CSIRO Image2Biomass Kaggle competition, where the task is to
+predict five continuous biomass targets from 357 pasture photographs. Our
+baseline freezes a DINOv2 ViT-S/14 backbone and trains a lightweight MLP head
+with a per-target weighted Smooth-L1 loss. On top of this baseline, each team
+member adapts one method targeting a different hypothesised bottleneck:
+\textbf{DA-Fusion} \citep{trabucco2024} generates diffusion-based synthetic
+training images; \textbf{CEMS} augments training along the local tangent space
+of the joint feature-target manifold; and \textbf{CHARMS}
+aligns image features with auxiliary tabular attributes available at training
+time. We analyse which methods compose natively on a shared backbone and build a
+combined pipeline integrating all three methods.
+Individually, all three methods perform near the baseline; CEMS narrowly edges
+ahead on the private leaderboard ($+0.002$ $R^{2}$) while the other two fall
+slightly short. The combined pipeline underperforms all individual methods.
+We discuss why each method's core assumptions interact poorly with continuous
+targets, strong pretrained features, and a training set of only a few hundred
+images.
+\end{abstract}
+
+%% ----------------------------------------------------------------
+\section{Introduction}
+
+Estimating pasture biomass from imagery supports grazing management and yield
+forecasting, but is characterised by small labelled datasets, fine visual
+distinctions between species, and continuous multi-target labels rather than
+discrete classes---properties that limit what standard vision pipelines deliver
+out of the box.
+
+Self-supervised vision transformers such as DINOv2 \citep{oquab2023} offer a
+natural starting point: pretrained features transfer well with limited data, and
+freezing the backbone mitigates overfitting on small training sets. A frozen
+DINOv2 ViT-S/14 with a lightweight MLP head forms our baseline. On top of this
+baseline, each group member contributed one recently published method addressing
+a different hypothesised bottleneck: DA-Fusion \citep{trabucco2024} targets data
+scarcity via diffusion-based synthetic augmentation; CEMS targets geometric
+structure in the joint feature-target manifold; CHARMS \citep{jiang2024} targets
+the use of auxiliary tabular signal available at training but not at test time.
+
+Our contributions are:
+\begin{enumerate}[label=(\arabic*)]
+  \item implementations and evaluations of each method under a unified baseline;
+  \item an integration analysis identifying which methods compose;
+  \item a combined pipeline integrating all three methods on a shared backbone; and
+  \item a discussion of where each method's assumptions hold or break in the
+        continuous-target small-data regime.
+\end{enumerate}
+
+%% ----------------------------------------------------------------
+\section{Problem and Data}
+
+The CSIRO Biomass Kaggle competition requires predicting five continuous biomass
+targets from a single RGB pasture photograph: dry weights of green biomass, dead
+biomass, clover, GDM, and total biomass. The metric is a weighted global
+$R^{2}$, computed by flattening all (image, target) pairs into one vector with
+per-target weights $0.1 / 0.1 / 0.1 / 0.2 / 0.5$; the \emph{Total} target
+therefore carries half the weight.
+
+The training set contains 357 unique pasture photographs at $2000 \times 1000$
+resolution. The small size, visual similarity across species, and continuous
+targets make this a challenging small-data regression problem. We use
+\texttt{GroupKFold} cross-validation with five folds, grouping by source so all
+orientation-augmented copies fall in the same fold; this prevents leakage
+introduced by flip-based augmentation. Predictions are clipped at zero since
+biomass cannot be negative.
+
+Each training image is expanded to four orientations (identity, horizontal flip,
+vertical flip, 180\textdegree), yielding 1428 training rows. This augmentation
+is shared across all methods.
+
+%% ----------------------------------------------------------------
+\section{Baseline}
+\label{sec:baseline}
+
+Our baseline is a frozen self-supervised feature extractor with a lightweight
+trainable head, chosen to make the most of a small training set without
+overfitting. Images are resized to $504 \times 252$, normalised with ImageNet
+statistics, and passed through a frozen DINOv2 ViT-S/14 backbone
+\citep{oquab2023}. We use the $384$-d \texttt{[CLS]} token as the image
+representation; the positional embeddings are interpolated to the non-square
+input resolution.
+
+The head, \textit{BiomassModel}, is a small MLP with an encoder
+($384 \to 256 \to 64$) followed by a regression head ($64 \to 32 \to 5$). Each
+linear layer is followed by GELU activation and dropout of $0.3$. Only the head
+is trained, yielding roughly $117$k trainable parameters.
+
+We train with a per-target weighted Smooth-L1 loss using the competition weights
+(\{Green, Dead, Clover\}: $0.1$, GDM: $0.2$, Total: $0.5$), optimised with AdamW
+at learning rate $3 \times 10^{-4}$, weight decay $10^{-3}$, batch size $64$,
+for $80$ epochs. Learning rate follows a cosine schedule with
+$\eta_{\min} = \eta_0 / 100$. Best checkpoints per fold are selected by
+validation weighted $R^{2}$. All three method sections below modify this
+baseline in one component at a time; other components remain unchanged unless
+explicitly stated.
+
+%% ----------------------------------------------------------------
+\section{Methods}
+
+\subsection{CEMS}
+\label{sec:cems}
+
+\paragraph{Motivation.}
+With only 357 labelled images, the training distribution is sparse and standard
+ERM trains on a fixed set of feature-target pairs. The manifold hypothesis
+suggests that DINOv2 features and continuous biomass targets lie near a
+low-dimensional manifold; sampling \emph{along} that manifold should yield more
+meaningful synthetic points than naive interpolation. CEMS~\citep{kaufman2025}
+operationalises this with a second-order local approximation that accounts for
+the curvature missed by first-order methods.
+
+\paragraph{Adaptation.}
+We operate in the \emph{ambient} joint space $\mathbf{z}{=}[\mathbf{x},\mathbf{y}]$,
+where $\mathbf{x}{\in}\mathbb{R}^{384}$ is the frozen DINOv2 CLS token and
+$\mathbf{y}{\in}\mathbb{R}^{5}$ are the biomass targets, giving a 389-d joint
+space. Because targets span very different scales (0--186\,g), we MinMax-scale
+$\mathbf{y}$ to $[0,1]$ before forming the joint space and inverse-transform
+synthetic labels back to raw scale for the loss.
+
+\paragraph{Pipeline.}
+For each minibatch of size $B{=}64$, CEMS centres the batch, computes a local
+SVD basis $B_u$, then estimates the gradient $\nabla g$ and Hessian $\mathbf{H}$
+of the normal-space embedding via ridge regression on projected neighbour
+differences.  A perturbation $\boldsymbol{\eta}{\sim}\mathcal{N}(\mathbf{0},\sigma\mathbf{I}_d)$
+is drawn in the $d$-dimensional tangent space and mapped back via
+\begin{equation}
+  \tilde{\mathbf{z}} = B_u\!\left[\boldsymbol{\eta},\;
+    \boldsymbol{\eta}^{\!\top}\!\nabla g
+    +\tfrac{1}{2}\boldsymbol{\eta}^{\!\top}\!\mathbf{H}\,\boldsymbol{\eta}
+  \right] + \boldsymbol{\mu}_{N_z}.
+\end{equation}
+The intrinsic dimension $d$ is re-estimated per batch with
+TwoNN~\citep{facco2017}; in practice $d{=}2$ throughout training.  We use fixed
+$\sigma{=}1$ and train on CEMS-synthesised samples only (\texttt{mix\_real=False}).
+
+\paragraph{Results.}
+Table~\ref{tab:cems_results} reports validation and Kaggle performance.
+
+\begin{table}[h]
+  \centering
+  \caption{Validation and Kaggle test weighted $R^2$. Higher is better.}
+  \label{tab:cems_results}
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Model} & \textbf{Val $R^2$} & \textbf{Kaggle public} & \textbf{Kaggle private} \\
+    \midrule
+    Baseline & 0.7554 & 0.5533 & 0.5090 \\
+    CEMS     & 0.7668 & 0.5497 & 0.5106 \\
+    $\Delta$ & $+0.0114$ & $-0.0036$ & $+0.0016$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\paragraph{Discussion.}
+CEMS is the only individual method that does not degrade private leaderboard
+performance, gaining $+0.002$ $R^{2}$ over the baseline, though this margin is
+within run-to-run noise. The estimated intrinsic dimension of the joint space
+is $d{=}~2.19$, far below the 389-d ambient dimension, indicating that the frozen
+DINOv2 backbone already captures most meaningful variation. Sampling within this
+two-dimensional manifold introduces only mild diversity, limiting the benefit
+of the second-order curvature correction.
+
+\subsection{CHARMS}
+\label{sec:charms}
+
+\paragraph{Motivation.}
+The CSIRO Biomass dataset includes expert-measured attributes available at
+training time---pasture height, GreenSeeker NDVI, geographic state, and
+dominant species---but not at inference. This matches the setting CHARMS
+\citep{jiang2024} is designed for: leveraging tabular side-channel information
+during training to improve an image-only model at test time.
+
+\paragraph{Adaptation.}
+The original method operates on CNN spatial feature maps; here we use the
+384-dimensional CLS token from a frozen DINOv2 ViT-S/14, treating each
+dimension as a channel. $k$-Means clustering ($k = 40$) groups dimensions
+before the OT cost matrix is computed. Four attributes are used: two numerical
+(\texttt{Pre\_GSHH\_NDVI}, \texttt{Height\_Ave\_cm}) and two categorical
+(\texttt{State}, \texttt{Species\_first}), giving
+$\mathbf{T} \in \mathbb{R}^{4 \times 384}$.
+
+\paragraph{Pipeline.}
+An FT-Transformer \citep{gorishniy2021} encodes tabular attributes into
+per-attribute embeddings and produces an auxiliary biomass prediction. An
+Optimal Transport step aligns image dimensions with attributes via inter-sample
+cosine similarity, yielding transfer matrix $\mathbf{T}$. Li2t heads then
+predict each attribute from $\mathbf{T}$-weighted image features. The total
+loss is:
+\begin{equation}
+    \mathcal{L}
+    =
+    \mathcal{L}_{\text{image}}
+    +
+    \lambda_{\text{tab}}\,\mathcal{L}_{\text{tabular}}
+    +
+    \lambda_{\text{li2t}}\,\mathcal{L}_{\text{i2t}}
+\end{equation}
+with $\lambda_{\text{tab}} = 0.5$, $\lambda_{\text{li2t}} = 0.1$, and
+$\mathbf{T}$ recomputed every five epochs.
+
+\paragraph{Results.}
+Table~\ref{tab:charms_results} and Figure~\ref{fig:charms_curves} report
+validation and Kaggle performance over 80 epochs.
+
+\begin{table}[h]
+    \centering
+    \caption{Validation and Kaggle test weighted $R^2$. Higher is better.}
+    \label{tab:charms_results}
+    \begin{tabular}{lccc}
+        \toprule
+        \textbf{Model}
+            & \textbf{Val $R^2$}
+            & \textbf{Kaggle public}
+            & \textbf{Kaggle private} \\
+        \midrule
+        Baseline & 0.7935 & 0.5533 & 0.5090 \\
+        CHARMS   & 0.7774 & 0.5435 & 0.5080 \\
+        $\Delta$ & $-0.0161$ & $-0.0098$ & $-0.0010$ \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=\linewidth]{charms_curves.png}
+    \caption{Validation curves over 80 epochs. CHARMS peaks at epoch 74
+             ($R^2 = 0.7774$) versus epoch 62 for the baseline ($R^2 = 0.7697$),
+             with similar convergence in both $R^2$ and loss.}
+    \label{fig:charms_curves}
+\end{figure}
+
+\paragraph{Discussion.}
+CHARMS does not improve over the baseline. The CLS token is lower-dimensional
+than the CNN feature maps the method was designed for, limiting the quality of
+the OT alignment. The dataset is also far smaller than those in the original
+paper, making similarity estimates noisy. Finally, the regression setting is a
+mismatch: the original paper targets classification, where discrete labels
+provide stronger supervision for the auxiliary Li2t losses.
+
+
+\subsection{DA-Fusion}
+\label{sec:dafusion}
+
+\paragraph{Motivation.}
+DA-Fusion \citep{trabucco2024} expands small training sets by generating
+synthetic images with Stable Diffusion, using textual inversion \citep{gal2023}
+to learn a token per fine-grained class. It was proposed for image
+classification, where each synthetic inherits its source image's class label.
+We adapt it to our 5-target biomass regression setting, where labels are
+continuous dry-weight vectors.
+
+\paragraph{Adaptation.}
+Textual inversion assumes discrete categories, so we use pasture species as the
+grouping: one \texttt{<species\_token>} per species with at least 10 images, and
+a generic prompt otherwise. The label-copy rule is stronger for regression than
+for classification, since continuous targets are sensitive to visual changes
+that a class label would absorb. We mitigate this by keeping img2img strength
+low (0.2--0.6, jittered) so synthetics remain visually close to their source,
+and apply a per-fold leakage filter excluding synthetics whose source image is
+in the validation split.
+
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=0.8\textwidth]{example_da_fused_images.png}
+    \caption{One real image (left) and three DA-Fusion synthetics.}
+    \label{fig:da-fusion-examples}
+\end{figure}
+
+\paragraph{Pipeline.}
+Textual inversion and image synthesis are run offline, producing 1071 synthetic
+images paired with their source image's target vector. At training time,
+synthetics are injected into the DINOv2\,+\,MLP baseline; all other components
+(backbone, head, loss, optimiser, schedule) are unchanged.
+
+\paragraph{Results.}
+On the Kaggle leaderboard, DA-Fusion with the DINOv2 backbone scored
+$0.531$ public / $0.498$ private weighted $R^{2}$, compared to the baseline's
+$0.532$ / $0.509$. A ResNet-50 variant, tried as a backbone ablation, scored
+$0.483$ / $0.425$. To disentangle the effect from classical pixel-space
+augmentation, we ran a local fold-0 ablation against a RandAugment baseline
+under the identical DINOv2 + MLP pipeline: RandAugment lifts validation
+$R^{2}$ by $+0.11$, whereas DA-Fusion lifts it by only $+0.07$ and has
+strictly worse per-target RMSE on Green, Clover, and Total. Both augmented
+runs also converge substantially faster than the plain baseline, reaching
+near-peak validation $R^{2}$ within $\sim\!15$ epochs versus $\sim\!40$ for
+the baseline. The Kaggle and local trends agree: DA-Fusion helps less than
+simple classical augmentation.
+
+\paragraph{Discussion.}
+Three factors likely contribute.
+\textbf{(1)} The label-copy assumption is weaker in regression than in
+classification: a Stable Diffusion edit that would leave a class label intact
+can shift continuous biomass targets, injecting label noise.
+\textbf{(2)} The DINOv2 backbone is pretrained at a scale that may already
+saturate the signal extractable from 357 training images, leaving little room
+for \emph{added} data to help; RandAugment still wins because it regularises
+the head via feature-level perturbation rather than adding new samples.
+\textbf{(3)} Synthetics outnumber real images after injection and may dilute
+real-image gradients, an effect RandAugment avoids since it augments the real
+images in place.
+Continuous-target tasks may need a label-aware generation step (e.g.\
+conditioning on the target vector) to avoid the label-noise issue.
+
+
+%% ----------------------------------------------------------------
+\section{Combined Pipeline}
+\label{sec:combined}
+
+The assignment asks us to combine our individual methods into a single system.
+Before implementation, we analysed which of the three methods compose natively
+on our shared DINOv2\,+\,MLP baseline.
+
+\paragraph{Compatibility analysis.}
+DA-Fusion and CEMS are both training-time modifications to a frozen DINOv2
+backbone and compose cleanly: DA-Fusion expands the training set, and CEMS
+then builds its $k$-NN graph on the expanded $[\mathbf{X}, \mathbf{Y}]$ space.
+The only ordering constraint is that synthetics must be injected \emph{before}
+the $k$-NN graph is built, and the target scaler must be fitted on the
+combined training labels.
+
+CHARMS is also compatible: treating the 384 CLS dimensions as channels,
+as described in Section~\ref{sec:charms}, allows the OT alignment to operate
+on the same frozen DINOv2 features used by the other two methods.
+
+\paragraph{Full CHARMS integration.}
+The combined pipeline runs the complete CHARMS stack on the 384-d CLS token.
+An FT-Transformer encodes four tabular attributes (NDVI, pasture height,
+state, species) and produces an auxiliary biomass prediction; K-Means
+($k{=}40$) clusters image dimensions by co-activation; Earth Mover Distance
+aligns channel- and attribute-similarity matrices to yield
+$\mathbf{T}\!\in\!\mathbb{R}^{4\times 384}$, recomputed every five epochs.
+CHARMS losses are applied only to real samples, as synthetics carry no
+tabular data.
+
+\paragraph{Combined training loop.}
+For each \texttt{GroupKFold} split: (i) filter synthetics to the training
+split; (ii) extract DINOv2 features and tabular attributes for real training
+rows; (iii) fit the target scaler on the combined labels; (iv) cluster 384
+image dimensions via K-Means and initialise $\mathbf{T}$ uniformly;
+(v) train with the CEMS anchor loop---CHARMS losses computed on the
+real-sample subset of each anchor batch, $\mathbf{T}$ refreshed via EMD every
+five epochs. Checkpoint selection by validation weighted $R^{2}$.
+
+\subsection{Results}
+\label{sec:combined-results}
+
+Table~\ref{tab:combined-results} reports the combined pipeline's performance
+on the Kaggle leaderboard alongside the baseline and each individual method
+for reference.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{lcc}
+\toprule
+Pipeline & Public $R^{2}_{w}$ & Private $R^{2}_{w}$ \\
+\midrule
+Baseline (DINOv2\,+\,MLP)            & \textbf{0.553}& 0.509\\
+DA-Fusion                            & 0.531 & 0.498 \\
+CEMS                                 & 0.549& \textbf{0.510}\\
+CHARMS                               & 0.543& 0.508\\
+\midrule
+Combined (DA-Fusion\,+\,CEMS\,+\,CHARMS) & 0.549& 0.485\\
+\bottomrule
+\end{tabular}
+\caption{Weighted $R^{2}$ on the Kaggle leaderboard. The combined pipeline
+does not recover baseline performance.}
+\label{tab:combined-results}
+\end{table}
+
+The combined pipeline scores $0.549 / 0.485$ public/private weighted $R^{2}$---matching
+CEMS on the public leaderboard but falling below all individual methods on the private
+score. Combining the three modifications does not recover baseline performance.
+
+\subsection{Discussion}
+\label{sec:combined-discussion}
+
+The combined pipeline confirms the pattern visible in the individual results:
+each method's modification reduces performance, and stacking them compounds
+rather than cancels the effect. This is consistent with each method
+addressing a \emph{hypothesised} bottleneck that turns out not to be the real
+one in this setting---data scarcity for DA-Fusion, latent-space geometry for
+CEMS, and cross-modal supervision for CHARMS. When the actual constraint is
+elsewhere (plausibly the quality of the 5-target label signal given 357
+images and a frozen backbone that already saturates available representation
+capacity), adding components that each introduce their own noise or
+regularisation pressure makes the system worse, not better.
+
+\paragraph{Limitations.}
+Our conclusions come with caveats. Each method is evaluated with the
+hyperparameters reported in its source paper plus minimal tuning; a more
+thorough search might reduce the gap to baseline. Kaggle leaderboard scores
+reflect a single training run per method rather than a seed-averaged mean,
+so differences of $\pm 0.01$ $R^{2}$ are within run-to-run noise.
+
+%% ----------------------------------------------------------------
+\section{Conclusion}
+We adapted three recently published methods to a 5-target pasture-biomass
+regression task with 357 training images and a frozen DINOv2 backbone.
+Individually, all three methods perform near the baseline; CEMS narrowly edges
+it out on the private leaderboard ($+0.002$ $R^{2}$) while DA-Fusion and CHARMS
+fall slightly short. The combined pipeline underperforms all individual methods. We attribute
+this to mismatches between each method's target domain (classification,
+geometric regularity, or cross-modal supervision) and the actual constraints
+of our setting, and suggest that continuous-target small-data regression
+problems may benefit more from label-aware generation and head-level
+regularisation than from the forms of augmentation tested here.
+
+%% ----------------------------------------------------------------
+\bibliographystyle{plainnat}
+\begin{thebibliography}{9}
+
+\bibitem[Facco et~al.(2017)]{facco2017}
+Facco, E., d'Errico, M., Rodriguez, A., and Laio, A. (2017).
+\newblock Estimating the intrinsic dimension of datasets by a minimal
+  neighborhood information.
+\newblock \emph{Scientific Reports}, 7(1):12140.
+
+\bibitem[Gal et~al.(2023)]{gal2023}
+Gal, R., Alaluf, Y., Atzmon, Y., Patashnik, O., Bermano, A.~H., Chechik, G.,
+and Cohen-Or, D. (2023).
+\newblock An image is worth one word: Personalizing text-to-image generation
+  using textual inversion.
+\newblock In \emph{Proceedings of the Eleventh International Conference on
+  Learning Representations (ICLR)}.
+
+\bibitem[Kaufman \& Azencot(2025)]{kaufman2025}
+Kaufman, I. and Azencot, O. (2025).
+\newblock Curvature enhanced data augmentation for regression.
+\newblock In \emph{Proceedings of the 42nd International Conference on Machine
+  Learning (ICML)}, PMLR 267.
+
+\bibitem[Gorishniy et~al.(2021)]{gorishniy2021}
+Gorishniy, Y., Rubachev, I., Khrulkov, V., and Babenko, A. (2021).
+\newblock Revisiting deep learning models for tabular data.
+\newblock In \emph{Advances in Neural Information Processing Systems
+  (NeurIPS)}, volume~34, pages 18932--18943.
+
+\bibitem[Jiang et~al.(2024)]{jiang2024}
+Jiang, J., Ye, H., Wang, L., Yang, Y., Jiang, Y., and Zhan, D. (2024).
+\newblock Tabular insights, visual impacts: Transferring expertise from tables
+  to images.
+\newblock In \emph{Proceedings of the 41st International Conference on Machine
+  Learning}, PMLR 235.
+
+\bibitem[Oquab et~al.(2023)]{oquab2023}
+Oquab, M., Darcet, T., Moutakanni, T., et~al. (2023).
+\newblock {DINOv2}: Learning robust visual features without supervision.
+\newblock \emph{arXiv preprint arXiv:2304.07193}.
+
+\bibitem[Trabucco et~al.(2024)]{trabucco2024}
+Trabucco, B., Doherty, K., Gurinas, M., and Salakhutdinov, R. (2024).
+\newblock Effective data augmentation with diffusion models.
+\newblock In \emph{Proceedings of the Twelfth International Conference on
+  Learning Representations (ICLR)}.
+
+\end{thebibliography}
+
+\end{document}

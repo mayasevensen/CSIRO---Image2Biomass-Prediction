@@ -223,3 +223,6 @@ dinov2-small.zip
 
 # Local CEMS-main
 src/methods/cems/CEMS-main/
+
+# CEMS paper
+src/methods/cems/cems_paper.pdf

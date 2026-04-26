@@ -39,7 +39,7 @@ For DA-Fusion, synthetic augmented images must exist before running the notebook
 
 ---
 
-## Shared Baseline Pipeline (`src/shared/dinov2_baseline.ipynb`)
+## Shared Baseline Pipeline (`src/shared/dinov2_baseline.ipynb`) - group work
 
 A frozen DINOv2 ViT-S/14 backbone extracts 384-d CLS tokens from each image, resized to 504×252 and normalised with ImageNet statistics. Four orientation augmentations (identity, hflip, vflip, hflip+vflip) expand each training image to four variants; GroupKFold (5 folds, grouped by source image) prevents leakage across augmented variants. Extracted features are passed through a two-stage MLP: an Encoder (384→256→64, GELU, Dropout 0.3) followed by a Head (64→32→5, GELU, Dropout 0.3). Training runs for 80 epochs with AdamW (lr=3×10⁻⁴, weight_decay=10⁻³) and cosine annealing; the objective is a per-target weighted SmoothL1 loss and the evaluation metric is the competition's weighted global R².
 
