@@ -2,7 +2,61 @@
 Build models that predict pasture biomass from images, ground-truth measurements, and publicly available datasets. Farmers will use these models to determine when and how to graze their livestock.
 
 
-## CHARMS (`kaggle_baseline_pipeline_charms.ipynb`)
+## Shared Baseline Pipeline (`src/shared/dinov2_baseline.ipynb`)
+
+A frozen DINOv2 ViT-S/14 backbone extracts 384-d CLS tokens from each image, resized to 504×252 and normalised with ImageNet statistics. Four orientation augmentations (identity, hflip, vflip, hflip+vflip) expand each training image to four variants; GroupKFold (5 folds, grouped by source image) prevents leakage across augmented variants. Extracted features are passed through a two-stage MLP: an Encoder (384→256→64, GELU, Dropout 0.3) followed by a Head (64→32→5, GELU, Dropout 0.3). Training runs for 80 epochs with AdamW (lr=3×10⁻⁴, weight_decay=10⁻³) and cosine annealing; the objective is a per-target weighted SmoothL1 loss and the evaluation metric is the competition's weighted global R².
+
+DINOv2 was chosen over ResNet50 because its self-supervised pre-training on diverse imagery yields richer visual representations out of the box, giving each downstream method a strong enough foundation that measured improvements reflect the method itself rather than baseline weakness.
+
+### Results
+
+| Model | Val R² (fold 0) | Kaggle public | Kaggle private |
+|---|---|---|---|
+| Baseline | 0.7554 | 0.5533 | 0.5090 |
+
+---
+
+## CEMS (`src/methods/cems/kaggle_cems_pipeline.ipynb`) - Victor's Contribution
+
+Implementation of [CEMS (Curvature-Enhanced Manifold Sampling, Kaufman et al.)](https://arxiv.org/pdf/2506.06853) on top of the DINOv2 baseline. CEMS is a data augmentation method that generates synthetic training samples by estimating the local tangent space of the joint input-label manifold and sampling within it. It was chosen because the dataset is very small (~357 images) and the regression targets lie on a low-dimensional manifold (intrinsic dimensionality ~2.4), making manifold-aware augmentation a principled fit.
+
+### What is the same as the baseline
+
+- Frozen DINOv2 ViT-S/14 backbone extracting 384-d CLS tokens
+- Same `BiomassModel` architecture (Linear → GeLU → Dropout → Linear)
+- Same 4-orientation augmentation (identity, hflip, vflip, hflip+vflip)
+- Same GroupKFold split (5 folds, grouped by source image)
+- Same optimizer (AdamW), scheduler (cosine annealing), and training budget (80 epochs)
+- Same loss function (`weighted SmoothL1`) and evaluation metric (weighted global R²)
+
+### What CEMS adds
+
+#### 1. Joint [X, Y_scaled] space construction
+DINOv2 features are concatenated with MinMax-scaled labels to form a joint representation `zi = [x | y_scaled]`. The intrinsic dimension of this space (~2) is estimated via TwoNN (Facco et al. 2017) and used as the manifold dimension `d` for local SVD decomposition.
+
+#### 2. Sigma calibration
+Perturbation noise `σ` is either fixed (`sigma_auto=False`) or derived automatically from the median nearest-neighbour distance in the joint `z`-space, scaled by `sigma_fraction`. Using a single de-duplicated representative per image for the NN computation is controlled by `sigma_dedup`.
+
+#### 3. CEMS training loop replacing standard ERM
+Each training step builds a batch around a randomly selected anchor image (one orientation drawn per epoch, without replacement across anchors). Neighbours are selected from the training set (`neigh_type`: `random`, `knn`, or `knnp`). The anchor batch is passed through `get_batch_cems`, which applies local SVD, fits a first- and second-order polynomial in the tangent bundle via ridge regression, samples a perturbation `ν`, and returns synthetic `(x_new, y_new)` pairs. The model is trained on the loss against the inverse-scaled synthetic labels.
+
+### CEMS algorithm implementation
+
+The core CEMS functions were ported from the [azencot-group/CEMS](https://github.com/azencot-group/CEMS) repository. `_estimate_np` and `_solve_ridge_regression` were copied with no changes. The remaining functions - `_adjust_dims`, `_get_projection`, `_estimate_grad_hessian`, `_sample_tangent`, and `get_batch_cems` - were adapted: the `cems_method=2` branch was removed throughout, `xk`/`yk` parameters were dropped, the SVD driver was made conditional on CUDA to support CPU execution, `triu_indices` was given an explicit `device=` argument to fix a CUDA failure, and `get_batch_cems` was extended with a numpy-based intrinsic dimension path and a finite/range fallback guard.
+
+### Results
+
+| Model | Val R² (fold 0) | Kaggle public | Kaggle private |
+|---|---|---|---|
+| Baseline | 0.7554 | 0.5533 | 0.5090 |
+| CEMS | 0.7668 | 0.5497 | 0.5106 |
+| Δ | +0.0114 | −0.0036 | +0.0016 |
+
+CEMS improves both validation R² and private leaderboard score over the baseline, while public LB is marginally lower - consistent with the small dataset making single-fold validation noisy.
+
+---
+
+## CHARMS (`kaggle_baseline_pipeline_charms.ipynb`) - Maya's Contribution
 
 Implementation of [CHARMS (Jiang et al., ICML 2024)](https://proceedings.mlr.press/v235/jiang24ab.html)
 on top of the DINOv2 baseline. CHARMS uses tabular side-channel attributes
@@ -93,3 +147,30 @@ later (epoch 74 vs. epoch 62 for the baseline), suggesting the auxiliary
 losses slow down overfitting slightly. The gain does not transfer to the
 Kaggle leaderboard, likely due to the small dataset making single-fold
 validation noisy.
+
+# DA-Fusion Augmentation (`kaggle_baseline_pipeline_charms.ipynb`) - Ragnhild's Contribution
+
+## Method
+Adaptation of DA-Fusion (Trabucco et al., ICLR 2024) to the 
+Image2Biomass regression task.
+
+## Contribution included:
+- Implemented textual inversion pipeline for pasture species tokens
+- Generated synthetic images using Stable Diffusion img2img with the learned tokens
+- Added 1071 synthetic labeled training samples
+- Designed fold-safe synthetic filtering to prevent leakage
+- Integrated synthetic data into DINOv2 training pipeline
+
+## Files
+- textual_inversion_train.py: trains one token per species
+- generate_augmented.py: generates synthetic images via img2img
+- da_fusion_pipeline.ipynb: comparison experiment (3 conditions)
+- kaggle_da_fusion_pipeline.ipynb: same as above but compatible with Kaggle environment
+- learned_tokens/: 9 trained token embeddings
+
+## How to reproduce
+1. Run textual_inversion_train.py on a GPU 
+2. Run generate_augmented.py to generate synthetic images
+3. Run da_fusion_pipeline.ipynb locally or kaggle_da_fusion_pipeline.ipynb on Kaggle to compare methods
+
+More information on the implementation and results can be found in the respective notebooks.
