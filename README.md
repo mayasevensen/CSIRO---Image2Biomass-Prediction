@@ -9,6 +9,8 @@ Build models that predict pasture biomass from images, ground-truth measurements
 
 All local notebooks detect the repo root automatically and download DINOv2 weights from HuggingFace on first run - no manual setup required.
 
+Data can be downloaded from Kaggle https://www.kaggle.com/competitions/csiro-biomass/data
+
 | Method | Notebook |
 |---|---|
 | CEMS | `src/methods/cems/cems_pipeline.ipynb` |
