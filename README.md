@@ -27,6 +27,8 @@ python src/methods/da_fusion/generate_augmented.py \
   --output_csv data/tabular/train/train_augmented.csv
 ```
 
+Or access the generated synthetic images via this Kaggle dataset: https://www.kaggle.com/datasets/ragnhildklette/da-fusion-synthetic-biomass.
+
 ### Kaggle
 
 Use the `kaggle_` prefixed version of each notebook. DINOv2 weights must be uploaded as a Kaggle dataset before running:
@@ -35,7 +37,7 @@ Use the `kaggle_` prefixed version of each notebook. DINOv2 weights must be uplo
 2. Upload the `dinov2-small/` folder as a new Kaggle dataset.
 3. Attach that dataset to your notebook and run.
 
-For DA-Fusion, synthetic augmented images must exist before running the notebook. If they are not present, generate them first locally (see above), then upload the `data/image/train_augmented/` folder and `data/tabular/train_augmented.csv` as Kaggle datasets and attach them to your notebook.
+For DA-Fusion, access the generated synthetic images via the above linked Kaggle dataset.
 
 ---
 
@@ -216,3 +218,39 @@ The generated synthetic images can be accessed by following this link: https://w
 
 
 More information on the implementation and results can be found in the respective notebooks.
+
+# Combined pipeline (`src/methods/combined/kaggle_combined_pipeline.ipynb`) - group work
+
+All three methods are gated by boolean config flags (`USE_DA_FUSION`, `USE_CEMS`, `USE_CHARMS`); setting all to `False` reproduces the plain baseline.
+
+### What is the same as the baseline
+
+- Frozen DINOv2 ViT-S/14 backbone extracting 384-d CLS tokens
+- Same `BiomassModel` architecture (Linear → GeLU → Dropout → Linear)
+- Same 4-orientation augmentation (identity, hflip, vflip, hflip+vflip)
+- Same GroupKFold split (5 folds, grouped by source image)
+- Same optimizer (AdamW), scheduler (cosine annealing), and training budget (80 epochs)
+- Same loss function (`weighted SmoothL1`) and evaluation metric (weighted global R²)
+
+### What the combined pipeline adds
+
+- Full 5-fold CV loop with per-fold OOF predictions; test predictions are averaged across all folds
+- OOF predictions and fold summaries persisted to disk (`oof_combined.npz`, `fold_summaries.json`)
+
+### Deviations from individual method implementations
+
+#### CEMS
+
+- `sigma_auto` option and `calibrate_sigma()` removed — sigma is always fixed via `cfg.sigma`
+- Anchor loop restructured: iterates over a random permutation of all N individual samples with a `used` set (without-replacement at sample level), rather than the standalone's group-indexed loop that draws one sample per unique image group for `N_train // batch_size` steps per epoch
+- `build_group_index` removed
+- `MAX_ANCHORS_PER_EPOCH` cap added (absent in standalone)
+
+#### CHARMS
+
+- Li2t loss and OT subsample are restricted to real samples only (via `is_real` mask), because DA-Fusion synthetic samples carry no tabular data; standalone CHARMS applies Li2t to all training samples
+- `CombinedDataset` (carries `is_real` flag alongside tabular features) replaces the standalone's `CHARMSDataset`
+
+#### DA-Fusion
+
+- Synthetic leakage filter is applied per fold (the set of kept synthetics changes with each fold's training split); standalone filters once for fold 0 only
