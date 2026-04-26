@@ -13,7 +13,7 @@ alignment step.
 ### What is the same as the baseline
 
 - Frozen DINOv2 ViT-S/14 backbone extracting 384-d CLS tokens
-- Same `BiomassModel` architecture (Linear → ReLU → Dropout → Linear)
+- Same `BiomassModel` architecture (Linear → GeLU → Dropout → Linear)
 - Same 4-orientation augmentation (identity, hflip, vflip, hflip+vflip)
 - Same GroupKFold split (5 folds, grouped by source image)
 - Same optimizer (AdamW), scheduler (cosine annealing), and training budget (80 epochs)
